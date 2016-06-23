@@ -258,16 +258,12 @@ func handleParams(
 	ft reflect.Type,
 	rt *requestType,
 ) func(fv reflect.Value, p Params) ([]reflect.Value, error) {
-	returnJSON := ft.NumOut() > 1
 	needsParams := ft.In(0) == paramsType
 	if needsParams {
 		argStructType := ft.In(1).Elem()
 		return func(fv reflect.Value, p Params) ([]reflect.Value, error) {
 			if err := p.Request.ParseForm(); err != nil {
 				return nil, errgo.WithCausef(err, ErrUnmarshal, "cannot parse HTTP request form")
-			}
-			if returnJSON {
-				p.Response = headerOnlyResponseWriter{p.Response.Header()}
 			}
 			argv := reflect.New(argStructType)
 			if err := unmarshal(p, argv, rt); err != nil {
@@ -335,6 +331,10 @@ func (e ErrorMapper) handleResult(
 				e.WriteError(p.Response, herr.(error))
 				return
 			}
+			w := p.Response
+			if ct, ok := w.Header()["Content-Type"]; ok && len(ct) > 0 {
+				return
+			}
 			err = WriteJSON(p.Response, http.StatusOK, out[0].Interface())
 			if err != nil {
 				e.WriteError(p.Response, err)
@@ -374,11 +374,14 @@ type ErrorHandler func(Params) error
 func (e ErrorMapper) HandleJSON(handle JSONHandler) httprouter.Handle {
 	return func(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
 		val, err := handle(Params{
-			Response: headerOnlyResponseWriter{w.Header()},
+			Response: w,
 			Request:  req,
 			PathVar:  p,
 		})
 		if err == nil {
+			if ct, ok := w.Header()["Content-Type"]; ok && len(ct) > 0 {
+				return
+			}
 			if err = WriteJSON(w, http.StatusOK, val); err == nil {
 				return
 			}
